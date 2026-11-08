@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>할 일 관리 앱 (Railway PostgreSQL)</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; background-color: white; color: black; }
+    #launcher-screen { display: flex; height: 100vh; align-items: center; justify-content: center; }
+    .launcher-box { text-align: center; padding: 40px; border: 1px solid black; }
+    .launcher-btn { padding: 10px 20px; font-size: 16px; font-weight: bold; background-color: white; color: black; border: 1px solid black; cursor: pointer; margin-top: 15px; }
+    .launcher-btn:hover { background-color: #f0f0f0; }
+    #app-container { padding: 20px; }
+    .header-area { display: flex; align-items: center; gap: 12px; margin-bottom: 15px; }
+    .header-area h2 { margin: 0; font-size: 22px; }
+    .db-status { font-size: 12px; color: #666; }
+    .input-area { display: flex; gap: 5px; margin-bottom: 20px; }
+    #todo-input { flex: 1; height: 32px; font-size: 16px; padding-left: 10px; border: 1px solid black; box-sizing: border-box; }
+    #add-btn { padding: 6px 12px; font-size: 14px; background-color: white; color: black; border: 1px solid black; cursor: pointer; }
+    #add-btn:hover { background-color: #f0f0f0; }
+    #add-btn:disabled { color: #999; cursor: default; }
+    ul { padding-left: 20px; margin: 0; }
+    li { margin-bottom: 8px; font-size: 16px; }
+    .todo-text { cursor: pointer; }
+    .done { text-decoration: line-through; color: #b0b0b0; }
+    .delete-btn { background: none; border: none; color: black; cursor: pointer; font-size: 14px; font-weight: bold; margin-left: 10px; }
+    .error-message { color: #b00020; font-size: 13px; margin-bottom: 10px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <div id="launcher-screen">
+    <div class="launcher-box">
+      <h2>투두리스트 준비 완료 (PostgreSQL)</h2>
+      <p>Railway PostgreSQL에 저장되는 앱입니다.</p>
+      <button id="launch-app-btn" class="launcher-btn">앱 화면으로 열기</button>
+    </div>
+  </div>
+
+  <div id="app-container" style="display: none;">
+    <div class="header-area">
+      <h2>&lt; 할 일 관리 &gt;</h2>
+      <span id="db-status" class="db-status">DB 연결 확인 중...</span>
+    </div>
+
+    <div id="error-message" class="error-message"></div>
+
+    <div class="input-area">
+      <input type="text" id="todo-input" placeholder="할 일을 입력하세요.">
+      <button id="add-btn">추가</button>
+    </div>
+
+    <ul id="todo-list"></ul>
+  </div>
+
+  <script>
+    const START_WIDTH = 420;
+    const START_HEIGHT = 600;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const isPopup = window.name === 'todoAppPopup';
+
+      if (!isPopup) {
+        document.getElementById('launch-app-btn').addEventListener('click', () => {
+          const features = `width=${START_WIDTH},height=${START_HEIGHT},toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes`;
+          window.open(window.location.href, 'todoAppPopup', features);
+        });
+      } else {
+        document.getElementById('launcher-screen').style.display = 'none';
+        document.getElementById('app-container').style.display = 'block';
+        initApp();
+      }
+    });
+
+    function initApp() {
+      const input = document.getElementById('todo-input');
+      const addBtn = document.getElementById('add-btn');
+      const todoList = document.getElementById('todo-list');
+      const status = document.getElementById('db-status');
+      const errorMessage = document.getElementById('error-message');
+
+      function showError(message = '') {
+        errorMessage.textContent = message;
+      }
+
+      async function api(url, options = {}) {
+        const response = await fetch(url, {
+          headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+          ...options,
+        });
+
+        if (!response.ok) {
+          let message = '서버 요청에 실패했습니다.';
+          try {
+            const data = await response.json();
+            if (data.error) message = data.error;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        if (response.status === 204) return null;
+        return response.json();
+      }
+
+      async function renderList() {
+        showError();
+        try {
+          const todos = await api('/api/todos');
+          todoList.innerHTML = '';
+          todos.forEach(todo => createTodoElement(todo.id, todo.task, todo.is_done));
+          status.textContent = 'PostgreSQL 연결됨';
+        } catch (error) {
+          status.textContent = 'DB 연결 오류';
+          showError(error.message);
+        }
+      }
+
+      function createTodoElement(id, text, isDone) {
+        const li = document.createElement('li');
+        li.dataset.id = id;
+
+        const textSpan = document.createElement('span');
+        textSpan.className = 'todo-text';
+        textSpan.textContent = text;
+        textSpan.dataset.done = String(isDone);
+        if (isDone) textSpan.classList.add('done');
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'delete-btn';
+        delBtn.textContent = 'X';
+
+        li.appendChild(textSpan);
+        li.appendChild(delBtn);
+        todoList.appendChild(li);
+      }
+
+      async function addTodo() {
+        const task = input.value.trim();
+        if (!task) return;
+
+        addBtn.disabled = true;
+        showError();
+
+        try {
+          await api('/api/todos', {
+            method: 'POST',
+            body: JSON.stringify({ task }),
+          });
+          input.value = '';
+          await renderList();
+        } catch (error) {
+          showError(error.message);
+        } finally {
+          addBtn.disabled = false;
+          input.focus();
+        }
+      }
+
+      addBtn.addEventListener('click', addTodo);
+
+      input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') addTodo();
+      });
+
+      todoList.addEventListener('click', async event => {
+        const li = event.target.closest('li');
+        if (!li) return;
+
+        const id = Number.parseInt(li.dataset.id, 10);
+        showError();
+
+        try {
+          if (event.target.classList.contains('delete-btn')) {
+            await api(`/api/todos/${id}`, { method: 'DELETE' });
+          } else if (event.target.classList.contains('todo-text')) {
+            const current = event.target.dataset.done === 'true';
+            await api(`/api/todos/${id}`, {
+              method: 'PATCH',
+              body: JSON.stringify({ is_done: !current }),
+            });
+          } else {
+            return;
+          }
+
+          await renderList();
+        } catch (error) {
+          showError(error.message);
+        }
+      });
+
+      renderList();
+    }
+  </script>
+</body>
+</html>
