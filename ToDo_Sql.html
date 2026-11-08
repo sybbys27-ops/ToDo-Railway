@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>할 일 관리 앱 (SQLite 학습용)</title>
+    <!-- SQLite 구동을 위한 sql.js 라이브러리 추가 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    <style>
+        /* 기본 공통 스타일: 흰색 배경, 검은색 글씨 */
+        body { margin: 0; font-family: sans-serif; background-color: white; color: black; }
+
+        /* 런처(시작) 화면 스타일 */
+        #launcher-screen { display: flex; height: 100vh; align-items: center; justify-content: center; }
+        .launcher-box { text-align: center; padding: 40px; border: 1px solid black; }
+        .launcher-btn { padding: 10px 20px; font-size: 16px; font-weight: bold; background-color: white; color: black; border: 1px solid black; cursor: pointer; margin-top: 15px; }
+        .launcher-btn:hover { background-color: #f0f0f0; }
+
+        /* 앱 본화면 스타일 */
+        #app-container { padding: 20px; }
+        .header-area { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; }
+        .header-area h2 { margin: 0; font-size: 22px; }
+        .action-btn, #add-btn { padding: 6px 12px; font-size: 14px; background-color: white; color: black; border: 1px solid black; cursor: pointer; }
+        .action-btn:hover, #add-btn:hover { background-color: #f0f0f0; }
+        
+        #file-input { display: none; }
+        .input-area { display: flex; gap: 5px; margin-bottom: 20px; }
+        #todo-input { flex: 1; height: 32px; font-size: 16px; padding-left: 10px; border: 1px solid black; box-sizing: border-box; }
+        
+        ul { padding-left: 20px; margin: 0; }
+        li { margin-bottom: 8px; font-size: 16px; }
+        .todo-text { cursor: pointer; }
+        .done { text-decoration: line-through; color: #b0b0b0; } 
+        .delete-btn { background: none; border: none; color: black; cursor: pointer; font-size: 14px; font-weight: bold; margin-left: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="launcher-screen">
+        <div class="launcher-box">
+            <h2>투두리스트 준비 완료 (SQLite)</h2>
+            <p>독립된 앱 화면(420x600)으로 실행합니다.</p>
+            <button id="launch-app-btn" class="launcher-btn">앱 화면으로 열기</button>
+        </div>
+    </div>
+
+    <div id="app-container" style="display: none;">
+        <div class="header-area">
+            <h2>&lt; 할 일 관리 &gt;</h2>
+            <button class="action-btn" id="import-btn">DB 열기</button>
+            <button class="action-btn" id="export-btn">DB 저장</button>
+        </div>
+
+        <div class="input-area">
+            <input type="text" id="todo-input" placeholder="할 일을 입력하세요.">
+            <button id="add-btn">추가</button>
+            <input type="file" id="file-input" accept=".db,.sqlite">
+        </div>
+
+        <ul id="todo-list"></ul>
+    </div>
+
+    <script>
+        const START_WIDTH = 420;  
+        const START_HEIGHT = 600; 
+
+        // 팝업 런처 로직
+        document.addEventListener('DOMContentLoaded', () => {
+            const isPopup = (window.name === 'todoAppPopup');
+            if (!isPopup) {
+                document.getElementById('launch-app-btn').addEventListener('click', () => {
+                    const features = `width=${START_WIDTH},height=${START_HEIGHT},toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes`;
+                    window.open(window.location.href, 'todoAppPopup', features);
+                    window.open('', '_self', '');
+                    window.close();
+                });
+            } else {
+                document.getElementById('launcher-screen').style.display = 'none';
+                document.getElementById('app-container').style.display = 'block';
+                initApp(); 
+            }
+        });
+
+        // 앱 핵심 기능 (SQLite 적용)
+        function initApp() {
+            const input = document.getElementById('todo-input');
+            const addBtn = document.getElementById('add-btn');
+            const todoList = document.getElementById('todo-list');
+            const importBtn = document.getElementById('import-btn');
+            const exportBtn = document.getElementById('export-btn');
+            const fileInput = document.getElementById('file-input');
+
+            let db = null;
+            let fileHandle = null; // 덮어쓰기를 위한 파일 핸들러
+
+            // 1. SQLite 초기화 및 테이블 생성
+            initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}` }).then(function(SQL) {
+                db = new SQL.Database();
+                
+                // SQL 쿼리: todos 테이블 만들기 (고유번호 id, 할일내용 task, 완료여부 is_done)
+                const createTableQuery = `
+                    CREATE TABLE IF NOT EXISTS todos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        task TEXT,
+                        is_done INTEGER
+                    );
+                `;
+                db.run(createTableQuery);
+                renderList();
+            });
+
+            // 2. DB에서 데이터를 읽어와 화면에 그리기 (SELECT)
+            function renderList() {
+                todoList.innerHTML = ''; 
+                if(!db) return;
+
+                // SQL 쿼리: 모든 데이터 가져오기
+                const result = db.exec("SELECT id, task, is_done FROM todos");
+                
+                if (result.length > 0) {
+                    const rows = result[0].values; // [ [1, "공부하기", 0], [2, "운동", 1] ... ] 형태
+                    rows.forEach(row => {
+                        const [id, task, is_done] = row;
+                        createTodoElement(id, task, is_done === 1);
+                    });
+                }
+            }
+
+            // 화면 요소 생성 함수 (DB의 ID값을 HTML에 몰래 숨겨둡니다)
+            function createTodoElement(id, text, isDone) {
+                const newLi = document.createElement('li');
+                newLi.dataset.id = id; // 나중에 삭제/수정 시 어떤 데이터인지 알기 위해 ID 저장
+                
+                const textSpan = document.createElement('span');
+                textSpan.className = 'todo-text';
+                textSpan.textContent = text;
+                if (isDone) textSpan.classList.add('done');
+                
+                const delBtn = document.createElement('button');
+                delBtn.className = 'delete-btn';
+                delBtn.textContent = 'X'; 
+
+                newLi.appendChild(textSpan);
+                newLi.appendChild(delBtn);
+                todoList.appendChild(newLi);
+            }
+
+            // 3. 할 일 추가 (INSERT)
+            addBtn.addEventListener('click', () => {
+                const text = input.value.trim();
+                if (text === '' || !db) return; 
+                
+                // SQL 쿼리: 새 데이터 넣기 (? 자리에 배열 값이 들어갑니다)
+                db.run("INSERT INTO todos (task, is_done) VALUES (?, ?)", [text, 0]);
+                
+                input.value = '';
+                renderList(); 
+            });
+
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') addBtn.click(); 
+            });
+
+            // 4. 할 일 삭제(DELETE) 및 상태 변경(UPDATE)
+            todoList.addEventListener('click', (event) => {
+                const li = event.target.closest('li');
+                if (!li) return;
+                
+                const id = parseInt(li.dataset.id); // 클릭한 항목의 DB 고유 ID
+
+                if (event.target.classList.contains('delete-btn')) {
+                    // SQL 쿼리: 해당 ID의 데이터 삭제
+                    db.run("DELETE FROM todos WHERE id = ?", [id]);
+                    renderList(); 
+                } 
+                else if (event.target.classList.contains('todo-text')) {
+                    // 현재 완료 상태 확인 후 반대로 변경 (0이면 1, 1이면 0)
+                    const isDoneNow = event.target.classList.contains('done') ? 0 : 1;
+                    
+                    // SQL 쿼리: 해당 ID의 데이터 수정
+                    db.run("UPDATE todos SET is_done = ? WHERE id = ?", [isDoneNow, id]);
+                    renderList(); 
+                }
+            });
+
+            // 5. DB 파일로 내보내기 (File System Access API 적용 - 덮어쓰기)
+            exportBtn.addEventListener('click', async () => {
+                if (!db) return;
+                const binaryArray = db.export(); // SQLite DB 전체를 이진 데이터로 변환
+
+                try {
+                    if ('showSaveFilePicker' in window) {
+                        if (!fileHandle) {
+                            fileHandle = await window.showSaveFilePicker({
+                                suggestedName: `todo_data.db`, // .db 확장자로 저장
+                                types: [{ description: 'SQLite Database', accept: {'application/x-sqlite3': ['.db']} }]
+                            });
+                        }
+                        
+                        const writable = await fileHandle.createWritable();
+                        await writable.write(binaryArray);
+                        await writable.close();
+
+                        const originalText = exportBtn.innerHTML;
+                        exportBtn.innerHTML = '저장 완료!';
+                        setTimeout(() => exportBtn.innerHTML = originalText, 1500);
+                    } else {
+                        // 구형 브라우저 처리
+                        const blob = new Blob([binaryArray], { type: 'application/x-sqlite3' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'todo_data.db'; 
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    }
+                } catch (err) {
+                    console.log("저장 취소 또는 오류 발생");
+                }
+            });
+
+            // 6. DB 파일 불러오기
+            importBtn.addEventListener('click', () => fileInput.click());
+            
+            fileInput.addEventListener('change', (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = function() {
+                    try {
+                        // JSON(텍스트)이 아니라 바이너리(ArrayBuffer)로 읽어서 DB 교체
+                        const Uints = new Uint8Array(reader.result);
+                        db = new window.SQL.Database(Uints); 
+                        renderList(); // 불러온 DB로 화면 다시 그리기
+                    } catch (err) { 
+                        alert("올바른 SQLite DB 파일이 아닙니다."); 
+                    }
+                };
+                reader.readAsArrayBuffer(file); 
+                event.target.value = ''; 
+            });
+        }
+    </script>
+</body>
+</html>
